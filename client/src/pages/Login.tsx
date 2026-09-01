@@ -1,5 +1,6 @@
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { branding } from "../config/branding";
 
 // Add the provider names you configure in Cognito here to get one-click
 // buttons that skip the Hosted UI IdP chooser. The name must match the
@@ -28,7 +29,7 @@ export function Login() {
 
   return (
     <div className="card">
-      <h1>Cognito SSO Lab</h1>
+      <h1>Sign in to {branding.name}</h1>
       <p className="muted">
         Authorization Code flow + PKCE against a Cognito User Pool. Tokens stay
         on the backend; the browser only holds a session cookie.

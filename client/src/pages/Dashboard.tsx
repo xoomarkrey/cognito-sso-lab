@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { branding } from "../config/branding";
 
 function Countdown({ expiresAt }: { expiresAt: number }) {
   const [now, setNow] = useState(() => Date.now());
@@ -22,7 +23,7 @@ export function Dashboard() {
   return (
     <div className="card">
       <div className="row">
-        <h1>Dashboard</h1>
+        <h1>{branding.name} · Dashboard</h1>
         <button className="btn ghost" onClick={() => void logout()}>
           Log out
         </button>

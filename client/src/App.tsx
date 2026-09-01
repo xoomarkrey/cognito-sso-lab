@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
+import { AppRibbon } from "./components/AppRibbon";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
@@ -6,8 +7,10 @@ import "./App.css";
 
 export default function App() {
   return (
-    <main className="app">
-      <Routes>
+    <>
+      <AppRibbon />
+      <main className="app">
+        <Routes>
         <Route path="/" element={<Login />} />
         <Route
           path="/dashboard"
@@ -17,8 +20,9 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </main>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
+    </>
   );
 }
