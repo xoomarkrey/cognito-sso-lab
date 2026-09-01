@@ -87,3 +87,29 @@ pre {
   font-size: 13px;
   line-height: 1.5;
 }
+
+/* --- Per-instance ribbon (VITE_APP_NAME / VITE_APP_ACCENT) ------------------
+   Makes two browser windows running the same codebase distinguishable at a
+   glance during the SSO demo. Colour comes from --app-band, set in
+   src/config/branding.ts from the env var. */
+.ribbon {
+  background: var(--app-band, var(--accent));
+  color: #fff;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 10px 20px;
+  font: 600 15px/1.3 var(--sans);
+  letter-spacing: 0.3px;
+}
+
+.ribbon-name {
+  font-size: 17px;
+}
+
+.ribbon-meta {
+  font: 400 13px/1.3 var(--mono);
+  opacity: 0.85;
+}
