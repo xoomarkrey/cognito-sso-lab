@@ -10,7 +10,7 @@ Pick your track(s):
 | **A** | Microsoft Entra ID | **SAML** | Free* | Matches what your PM described. Real Microsoft. Publicly reachable, so no tunnel. *Getting a free tenant has become painful — see A.1. |
 | **B** | Microsoft Entra ID | **OIDC** | Free* | Same IdP, the other protocol. Do it right after A to feel the difference. |
 | **C** | Keycloak (Docker) | SAML **and** OIDC | Free | A local IdP you fully control. Best for *understanding* — you can watch every request. Needs a public tunnel (Cognito can't reach `localhost`). |
-| **D** | Okta (Integrator Free plan) | SAML **and** OIDC | Free, **no card** | Hosted (no tunnel), up to 100 users, both protocols. The most representative of a real enterprise IdP after Entra. **Start here if Azure signup is blocking you.** |
+| **D** | Okta (Integrator Free plan) | SAML **and** OIDC | Free, **no card** | Hosted (no tunnel), both protocols, **10 active users**. The most representative of a real enterprise IdP after Entra. **Start here if Azure signup is blocking you** — but see D.0, it is an evaluation org, not a production one. |
 
 Recommended: if you can get an Entra tenant, **A → B**. If not, **D** (Okta) gives
 you the same SAML + OIDC experience with zero account friction. Do **C**
@@ -334,18 +334,58 @@ Cognito pool** — ideal for a side-by-side demo.
 
 ## Track D — Okta (Integrator Free plan)
 
-Free, **no credit card**, up to 100 users, hosted (so **no tunnel** — Cognito
-reaches it directly). Does SAML and OIDC. This is the smoothest path if Azure
-signup is blocking you, and Okta is the enterprise IdP your team is most likely
-to meet after Entra.
+Free, **no credit card**, hosted (so **no tunnel** — Cognito reaches it
+directly). Does SAML and OIDC. This is the smoothest path if Azure signup is
+blocking you, and Okta is the enterprise IdP your team is most likely to meet
+after Entra. The free org is capped at **10 active users** — see D.0.
+
+### D.0 What the free plan actually gives you
+
+Okta renamed **Developer Edition** to the **Integrator Free Plan** in May 2025.
+Anything you read online referring to `dev-01234567.okta.com` orgs predates that.
+
+| | Integrator Free Plan |
+|---|---|
+| Cost | Free, **no credit card** |
+| Signup | name, location, **business email** |
+| **Active users** | **10** |
+| App integrations | no limit |
+| Authentications | 100/minute |
+| Support | community forums only |
+| Lifetime | **deactivated after 180 days of inactivity** |
+
+Ten users is fine for this lab and rules the free org out as a real IdP for a
+team — treat it as an evaluation environment. Running Okta for real means paid
+Workforce Identity.
 
 ### D.1 Create the Okta org
 
-1. <https://developer.okta.com/signup/> → sign up with email (or Google/GitHub).
-   Verify the email.
-2. You get an org URL like `https://dev-01234567.okta.com`. The admin console is
-   at `https://dev-01234567.okta.com/admin` (a fresh org drops you there).
-   Call this origin `<okta>` below.
+1. <https://developer.okta.com/signup/> → sign up with a **business email**
+   address. Verify the email.
+2. You land on the **admin console**, at a hostname like
+   `https://integrator-12345678-admin.okta.com`.
+
+**Write down two different URLs — this trips up almost everyone:**
+
+```
+integrator-xxxx-admin.okta.com     <- admin console. NEVER goes in any config.
+https://integrator-xxxx.okta.com   <- your org URL / OIDC issuer. This one.
+```
+
+They are different **hostnames**, not a path on the same host. Call the second
+one `<okta>` below. Confirm it before you go any further:
+
+```bash
+curl -s https://integrator-xxxx.okta.com/.well-known/openid-configuration | jq .issuer
+```
+
+Whatever `issuer` prints is `<okta>` — copy it exactly, no trailing slash. If
+Cognito later refuses the provider with *"Error retrieving OIDC configuration"*,
+this is almost always why: `-admin` is still in the URL.
+
+> **Not `/oauth2/default`.** Your org also has a custom authorization server at
+> `<okta>/oauth2/default`, for issuing access tokens to *your own* APIs. Plain
+> SSO federation uses the **org** authorization server — the bare `<okta>`.
 
 ### D.2 Create a test user
 
@@ -356,7 +396,13 @@ Admin console → **Directory → People → Add person**:
   on first login"
 - **Save**
 
-*(Or just use your own Okta admin account — it's a valid user too.)*
+**Do this twice**, e.g. `test1@example.com` and `test2@example.com`.
+Attribute-mapping bugs are invisible with a single account — you cannot tell
+"the mapping works" from "it happens to work for me". One account proves the
+flow; two prove the mapping.
+
+*(Your own Okta admin account is a valid user too, but it is a poor test — it
+already has a session and every assignment.)*
 
 ### D.3a Okta as an **OIDC** IdP
 
@@ -367,12 +413,19 @@ Admin → **Applications → Applications → Create App Integration**:
 - **Grant type:** Authorization Code
 - **Sign-in redirect URIs:** `<cognito-domain>/oauth2/idpresponse`
 - **Sign-out redirect URIs:** `<cognito-domain>` (optional)
-- **Assignments:** *Allow everyone in your organization to access* (or assign
-  your test user)
-- **Save.** On the app's **General** tab copy **Client ID** and **Client secret**.
+- **Assignments:** *Allow everyone in your organization to access*, or assign the
+  test users from D.2  ← **do not skip**
+- **Save.** On the app's **General** tab copy **Client ID** and **Client secret**
+  (Okta keeps the secret visible there, so you can come back for it).
+
+> An unassigned user gets *"You do not have permission to access this app"* at
+> the Okta login screen. It reads like a protocol error and is not — it is the
+> single most common federation failure. Check **Applications → Cognito →
+> Assignments** if you see it.
 
 Issuer (the org authorization server):
-- Issuer: `<okta>`  (e.g. `https://dev-01234567.okta.com`)
+- Issuer: `<okta>`  (e.g. `https://integrator-12345678.okta.com` — **no**
+  `-admin`, see D.1)
 - Check discovery in a browser: `<okta>/.well-known/openid-configuration`
   — it must list `authorization_endpoint`, `token_endpoint`, `jwks_uri`,
   `userinfo_endpoint`.
@@ -387,10 +440,40 @@ Cognito → pool → **Add identity provider → OpenID Connect**:
 | Issuer URL | `<okta>` |
 | Attributes request method | **GET** |
 
-Map attributes: `email ← email`, `name ← name`.
+**Map attributes** (User pool attribute ← Okta claim):
+
+| User pool attribute | Okta claim |
+|---|---|
+| `email` | `email` |
+| `name` | `name` |
+| `username` *(recommended)* | `sub` |
+| `email_verified` *(optional)* | `email_verified` |
+
+`email` is **mandatory** — the pool requires it, so a federated login without it
+fails outright. `name` is what `publicUser()` reads for the dashboard's Name row;
+without it the UI falls back to `cognito:username`, which for a federated user is
+the ugly `OktaOIDC_00u1b2c3…`.
+
+> **The provider name is permanent.** `OktaOIDC` is baked into the ID token's
+> `identities[].providerName` and into every `?idp=` link, including the button
+> in `Login.tsx`. Renaming it later means re-federating.
 
 Enable **OktaOIDC** on app client `app1` (Hosted UI → Identity providers) →
 test: `http://localhost:3000/auth/login?idp=OktaOIDC`.
+
+**Verify before moving on.** With both dev servers running:
+
+- [ ] `/auth/login?idp=OktaOIDC` redirects to `integrator-xxxx.okta.com`
+- [ ] After signing in as `test1` you land on the dashboard
+- [ ] Dashboard shows **Identity provider: OktaOIDC**
+- [ ] Dashboard shows **Email: test1@example.com** ← *this is the mapping check*
+- [ ] Cognito → pool → **Users** lists a user you never created, named
+      `OktaOIDC_00u1b2c3…`, confirmation status `EXTERNAL_PROVIDER`
+- [ ] Repeat with `test2` — a second distinct user with the right email
+
+If the email is blank the mapping is wrong. Fix it, **delete the bad shadow
+user**, and sign in again — Cognito populates the shadow profile only on first
+login, so a retry without deleting reuses the broken record.
 
 ### D.3b Okta as a **SAML** IdP
 
@@ -410,7 +493,7 @@ Then:
 - App → **Sign On** tab → **SAML Signing Certificates** / **View SAML setup
   instructions** → copy the **Identity Provider metadata** URL
   (`<okta>/app/<appId>/sso/saml/metadata`).
-- App → **Assignments** tab → assign your test user.
+- App → **Assignments** tab → assign your test users. ← **do not skip**, same failure mode as D.3a
 
 Cognito → **Add identity provider → SAML**:
 - Provider name: `OktaSAML`
@@ -428,6 +511,53 @@ Enable **OktaSAML** on app client `app1` → test: `?idp=OktaSAML`.
   patterns as Entra.
 - The dashboard now shows `Identity provider: OktaOIDC` / `OktaSAML` and the
   `identities` claim records the federation.
+- **No app code changed.** `buildAuthorizeUrl()` already forwards
+  `identity_provider`, `GET /auth/login` already accepts `?idp=`, and
+  `publicUser()` already reads `identities[0].providerName`. Uncommenting the
+  button in `Login.tsx` is the only edit, and even that is optional.
+
+### D.5 Debugging
+
+**Okta → Reports → System Log** records every authentication event in your org
+with the reason attached. Look there before changing configuration — it will tell
+you whether Okta rejected the user, the app, or the request.
+
+**Your own server terminal** is the other half. `auth.routes.ts` logs
+`Callback failed:` with the underlying error *before* redirecting the browser to
+a generic `/?error=Login failed`. The useful detail only exists in the terminal.
+
+| Symptom | Where | Cause |
+|---|---|---|
+| *"The redirect URI included is not valid"* | Okta | Okta's sign-in redirect URI ≠ `<cognito-domain>/oauth2/idpresponse`. A common slip is entering the app's `/auth/callback` instead — Okta never talks to your app |
+| *"You do not have permission to access this app"* | Okta | User not assigned (D.3a / D.3b) |
+| *"Error retrieving OIDC configuration"* | Cognito | Issuer wrong — usually `-admin` still in the URL (D.1) |
+| Okta button does nothing, or the chooser appears | app | The `idp` string in `Login.tsx` ≠ the Cognito provider name. Both must be `OktaOIDC` |
+| `invalid_request` from the Hosted UI | Cognito | `OktaOIDC` not enabled on **this** app client. Check you edited the client whose ID is in `server/.env` |
+| Dashboard says `Cognito` after an Okta login | app | You went through the native form. Use the button or `?idp=OktaOIDC` |
+| Shadow user created, email blank | Cognito | `email` not mapped. Fix, delete the user, retry |
+| `State mismatch (possible CSRF)` | app | The `ltx` cookie expired (10 min) or a stale tab was reused. Start the login again |
+
+### D.6 Cost, limits and teardown
+
+Federation itself is free to configure, but two numbers matter for planning:
+
+| | Limit |
+|---|---|
+| Okta free org — active users | **10** |
+| Okta free org — inactivity | deactivated after **180 days** |
+| Cognito native MAU | 10,000 free |
+| **Cognito federated (SAML/OIDC) MAU** | **50 free**, then ~$0.015/MAU |
+
+That last row is the one people get wrong: federated sign-ins have essentially no
+free tier compared with native ones. A dozen engineers sit well inside 50, but a
+plan that assumes "Cognito is free to 10,000 users" is wrong by the entire
+federated bill. *(Verified September 2026 — re-check before quoting it.)*
+
+**To undo Track D:** untick `OktaOIDC` / `OktaSAML` on each app client, delete
+the provider under **Social and external providers**, and delete the
+`OktaOIDC_…` shadow users. Federation is additive — the pool, app clients and
+native users are untouched. In Okta, deactivate then delete the app, and remove
+the test users.
 
 ---
 
