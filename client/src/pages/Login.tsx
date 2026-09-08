@@ -12,7 +12,7 @@ const IDP_BUTTONS: Array<{ label: string; idp?: string }> = [
   // { label: "Sign in with Microsoft Entra (SAML)", idp: "EntraSAML" },
   // { label: "Sign in with Microsoft Entra (OIDC)", idp: "EntraOIDC" },
   // { label: "Sign in with Okta (SAML)", idp: "OktaSAML" },
-  // { label: "Sign in with Okta (OIDC)", idp: "OktaOIDC" },
+  { label: "Sign in with Okta (OIDC)", idp: "OktaOIDC" },
   // { label: "Sign in with Keycloak (SAML)", idp: "KeycloakSAML" },
   // { label: "Sign in with Keycloak (OIDC)", idp: "KeycloakOIDC" },
 ];
