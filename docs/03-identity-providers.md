@@ -489,13 +489,8 @@ login, so a retry without deleting reuses the broken record.
 > **Do not use Okta's My Apps dashboard to check assignment.** An OIDC Web App
 > defaults to **Login initiated by: App Only**, so no tile appears there however
 > the user is assigned — the dashboard being empty means nothing. Verify
-> assignment in the admin console, on the app's **Assignments** tab.
->
-> If you *want* the tile: General → LOGIN → **Login initiated by** = *Either
-> Okta or App*, tick **Display application icon to users**, keep **Login flow** =
-> *Redirect to app to initiate login (OIDC Compliant)*, and set **Initiate login
-> URI** to `http://localhost:3000/auth/login?idp=OktaOIDC`. The tile then just
-> starts the normal SP-initiated flow, so you keep `state` and PKCE.
+> assignment in the admin console, on the app's **Assignments** tab. To give the
+> user a tile they can click, see D.3c.
 
 ### D.3b Okta as a **SAML** IdP
 
@@ -524,6 +519,64 @@ Cognito → **Add identity provider → SAML**:
   (Okta sends the attribute names exactly as you typed them, no XML namespace.)
 
 Enable **OktaSAML** on app client `app1` → test: `?idp=OktaSAML`.
+
+### D.3c Okta-initiated login — the app tile
+
+So far every login starts at your app. This turns on the other direction: the
+user opens Okta's **My Apps** dashboard, clicks a tile, and lands in the app
+already signed in. In a real deployment this is how people reach their apps at
+all, so it is worth doing once.
+
+Out of the box there is no tile — an OIDC Web App is created as **App Only**, and
+a tile with nowhere to send the user would be meaningless.
+
+**Applications → cognito-sso-lab → General → Edit**, LOGIN section:
+
+| Field | Value |
+|---|---|
+| Login initiated by | **Either Okta or App** |
+| Application visibility | ✅ **Display application icon to users** |
+| Login flow | **Redirect to app to initiate login (OIDC Compliant)** |
+| Initiate login URI | `http://localhost:3000/auth/login?idp=OktaOIDC` |
+
+Optionally set a **Logo** on the same tab, so the tile is recognisable rather
+than a grey cog.
+
+**What the Initiate login URI is.** It is where Okta sends the browser when the
+tile is clicked. Pointing it at your own `/auth/login` means the tile simply
+kicks off the *normal* SP-initiated flow: your backend mints `state` and a PKCE
+verifier as usual, redirects to Cognito, Cognito redirects to Okta, and Okta —
+which already has a session, since the user is sitting on its dashboard —
+returns immediately. The user sees one flash of redirects and arrives at the app
+dashboard.
+
+So you get the convenience of IdP-initiated login while keeping the security
+properties of SP-initiated: nothing arrives at your app that your app did not
+ask for. Okta appends its own `iss` parameter to that URI; the route ignores
+unknown query parameters, which is fine here.
+
+> **Leave "Login flow" on *Redirect to app to initiate login (OIDC Compliant)*.**
+> The other option — *Send ID Token directly to app (Okta Simplified)* — POSTs a
+> token straight to your app, skipping the authorization code exchange entirely.
+> This app is not built for that, and it discards PKCE and `state` along with it.
+
+**Verify:**
+
+- [ ] Sign in to `<okta>` as `test1@example.com`
+- [ ] **My Apps** now shows a **cognito-sso-lab** tile
+- [ ] Clicking it opens the app — Okta's dashboard launches tiles in a **new
+      browser tab** — and you land on the app dashboard already authenticated,
+      with no password prompt
+- [ ] The dashboard shows **Identity provider: OktaOIDC**
+
+If Okta refuses to save the Initiate login URI, it is objecting to `http`. It
+allows `http://localhost` for development; if your org rejects it anyway, skip
+this section — it is a convenience, not part of authentication.
+
+> **"Add apps" on the end-user dashboard is something else.** That is Okta's
+> self-service catalogue, where users *request* apps an admin has published. It
+> needs self-service enabled for the org and has nothing to do with the tile
+> above, which appears purely from assignment plus visibility.
 
 ### D.4 What to notice
 
