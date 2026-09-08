@@ -412,7 +412,18 @@ Admin → **Applications → Applications → Create App Integration**:
 - App name: `Cognito`
 - **Grant type:** Authorization Code
 - **Sign-in redirect URIs:** `<cognito-domain>/oauth2/idpresponse`
+  — **the `/oauth2/idpresponse` path is part of the value.** Pasting the bare
+  domain saves cleanly and then fails every login with Okta's 400
+  *"The 'redirect_uri' parameter must be a Login redirect URI"*, because Okta
+  matches the full URI, path included. This is the single most common mistake
+  in this track.
 - **Sign-out redirect URIs:** `<cognito-domain>` (optional)
+- **Proof Key for Code Exchange (PKCE):** leave **"Require PKCE as additional
+  verification" unchecked.** Cognito does not send PKCE upstream to a federated
+  IdP — it authenticates with the client secret. Tick it and Okta will reject
+  the token exchange *after* the user has already signed in, which is a
+  miserable failure to debug. (Your app's own PKCE, on the app→Cognito leg, is
+  unaffected: different exchange, different client.)
 - **Assignments:** *Allow everyone in your organization to access*, or assign the
   test users from D.2  ← **do not skip**
 - **Save.** On the app's **General** tab copy **Client ID** and **Client secret**
@@ -475,6 +486,17 @@ If the email is blank the mapping is wrong. Fix it, **delete the bad shadow
 user**, and sign in again — Cognito populates the shadow profile only on first
 login, so a retry without deleting reuses the broken record.
 
+> **Do not use Okta's My Apps dashboard to check assignment.** An OIDC Web App
+> defaults to **Login initiated by: App Only**, so no tile appears there however
+> the user is assigned — the dashboard being empty means nothing. Verify
+> assignment in the admin console, on the app's **Assignments** tab.
+>
+> If you *want* the tile: General → LOGIN → **Login initiated by** = *Either
+> Okta or App*, tick **Display application icon to users**, keep **Login flow** =
+> *Redirect to app to initiate login (OIDC Compliant)*, and set **Initiate login
+> URI** to `http://localhost:3000/auth/login?idp=OktaOIDC`. The tile then just
+> starts the normal SP-initiated flow, so you keep `state` and PKCE.
+
 ### D.3b Okta as a **SAML** IdP
 
 Admin → **Applications → Create App Integration → SAML 2.0 → Next**:
@@ -518,26 +540,171 @@ Enable **OktaSAML** on app client `app1` → test: `?idp=OktaSAML`.
 
 ### D.5 Debugging
 
-**Okta → Reports → System Log** records every authentication event in your org
-with the reason attached. Look there before changing configuration — it will tell
-you whether Okta rejected the user, the app, or the request.
+**Ask Cognito what it actually sends.** Most failures here are a mismatch between
+what Cognito puts on the wire and what Okta has registered, and guessing at it
+wastes hours. This needs no credentials and no running app — only `server/.env`:
+
+```bash
+cd cognito-sso-lab
+D=$(grep '^COGNITO_DOMAIN=' server/.env | cut -d= -f2- | tr -d '"' | sed 's:/*$::')
+C=$(grep '^COGNITO_CLIENT_ID=' server/.env | cut -d= -f2- | tr -d '"')
+R=$(grep '^COGNITO_REDIRECT_URI=' server/.env | cut -d= -f2- | tr -d '"')
+
+# 1. What does Cognito do with identity_provider=OktaOIDC?
+curl -s -o /dev/null -D - \
+  "$D/oauth2/authorize?response_type=code&client_id=$C&redirect_uri=$R&scope=openid+email+profile&identity_provider=OktaOIDC&state=diag" \
+  | grep -i '^location:'
+
+# 2. Does Okta accept it?
+curl -s -L -o /tmp/probe.html -w 'status: %{http_code}\n' --max-redirs 5 \
+  "$D/oauth2/authorize?response_type=code&client_id=$C&redirect_uri=$R&scope=openid+email+profile&identity_provider=OktaOIDC&state=diag"
+grep -o -i -m1 'Bad Request\|Sign In' /tmp/probe.html
+```
+
+Reading the result of probe 1:
+
+| `location:` says | Meaning |
+|---|---|
+| `integrator-xxxx.okta.com/oauth2/v1/authorize?…` | correct — federation is wired |
+| `<cognito-domain>/login?…` | `identity_provider` ignored → **OktaOIDC not enabled on this app client** |
+| `…/auth/callback?error=invalid_request&error_description=invalid_scope` | the app client is missing a scope (usually `profile`) |
+
+And probe 2: `status: 200` with `Sign In` means Okta accepted the redirect URI;
+`400` with `Bad Request` means it did not.
+
+**Okta → Reports → System Log** records every authentication event with its
+reason. The app page also has a **View Logs** button that pre-filters to it.
+Reading a login there:
+
+| Rows | Meaning |
+|---|---|
+| `policy.evaluate_sign_on` = **ALLOW**, reason *AUTHENTICATED*, no `user.session.start` | existing session reused — SSO working |
+| `policy.evaluate_sign_on` = **CHALLENGE** followed by `user.session.start` | no session existed; Okta asked for credentials, correctly |
 
 **Your own server terminal** is the other half. `auth.routes.ts` logs
 `Callback failed:` with the underlying error *before* redirecting the browser to
-a generic `/?error=Login failed`. The useful detail only exists in the terminal.
+a generic `/?error=Login failed`. The useful detail exists only in the terminal.
 
 | Symptom | Where | Cause |
 |---|---|---|
-| *"The redirect URI included is not valid"* | Okta | Okta's sign-in redirect URI ≠ `<cognito-domain>/oauth2/idpresponse`. A common slip is entering the app's `/auth/callback` instead — Okta never talks to your app |
-| *"You do not have permission to access this app"* | Okta | User not assigned (D.3a / D.3b) |
-| *"Error retrieving OIDC configuration"* | Cognito | Issuer wrong — usually `-admin` still in the URL (D.1) |
-| Okta button does nothing, or the chooser appears | app | The `idp` string in `Login.tsx` ≠ the Cognito provider name. Both must be `OktaOIDC` |
-| `invalid_request` from the Hosted UI | Cognito | `OktaOIDC` not enabled on **this** app client. Check you edited the client whose ID is in `server/.env` |
-| Dashboard says `Cognito` after an Okta login | app | You went through the native form. Use the button or `?idp=OktaOIDC` |
+| *"The 'redirect_uri' parameter must be a Login redirect URI"* | Okta 400 | Okta's sign-in redirect URI ≠ what Cognito sends. **Check the `/oauth2/idpresponse` path is present** — the bare domain is the usual slip. Entering the app's `/auth/callback` is the other; Okta never talks to your app |
+| *"You do not have permission to access this app"*, **or Okta asks you to sign in again despite a live session** | Okta | User not assigned. Check the app's **Assignments** tab — *not* the My Apps dashboard, which shows no tile for an App Only integration |
+| *"Error retrieving OIDC configuration"* | Cognito | Issuer wrong — usually `-admin` still in it (D.1) |
+| `invalid_scope` | Cognito | App client is missing a scope. It must have `openid`, `email` **and** `profile` |
+| Cognito shows its own login page instead of going to Okta | Cognito | `OktaOIDC` not ticked on this app client. Confirm you edited the client whose ID is in `server/.env` |
+| *"Invalid request"* on the Cognito logout page | Cognito | `logout_uri` is not in the app client's **Allowed sign-out URLs** |
+| Okta button does nothing useful | app | The `idp` string in `Login.tsx` ≠ the Cognito provider name. Both must be `OktaOIDC` |
+| Dashboard says `Cognito` after an Okta login | app | You used the native form. Use the Okta button or `?idp=OktaOIDC` |
 | Shadow user created, email blank | Cognito | `email` not mapped. Fix, delete the user, retry |
-| `State mismatch (possible CSRF)` | app | The `ltx` cookie expired (10 min) or a stale tab was reused. Start the login again |
+| `State mismatch (possible CSRF)` | app | The `ltx` cookie expired (10 min), or a stale tab was reused |
+| Rejected the token exchange after a successful Okta login | Okta | **Require PKCE** is ticked on the Okta app. Untick it (D.3a) |
 
-### D.6 Cost, limits and teardown
+#### SSO looks broken in a private window — it isn't
+
+Testing single sign-on in **Safari Private Browsing** produces a convincing false
+negative: you sign in to Okta, open the app, click the Okta button, and Okta asks
+for credentials again as though no session existed.
+
+It didn't. Safari Private Browsing runs Advanced Tracking and Fingerprinting
+Protection, which includes bounce-tracking mitigation, and Okta's position in the
+chain is exactly the shape that triggers it:
+
+```
+localhost:5173 → …amazoncognito.com → integrator-xxxx.okta.com
+```
+
+Okta is reached only as a redirect hop from another site. Safari partitions or
+drops its cookie, so the authorize request arrives with no session. The giveaway
+is a Safari banner offering **"Reload with Reduced Protections"**, and a sign-in
+form with an **empty** username field — a policy-driven re-challenge would know
+who you are.
+
+**Test SSO in a normal window.** Private/incognito modes are the right tool for
+testing a *fresh* login and the wrong tool for testing session reuse, which is
+the entire thing SSO does. Chrome Incognito is less aggressive than Safari's, but
+a normal window is the honest test.
+
+### D.6 If you rebuild the user pool
+
+Deleting and recreating the pool — routine in a shared lab account — invalidates
+four things at once, in two consoles, each failing with an unrelated-looking
+error. Work through all four:
+
+| # | Redo | Where | Symptom if you skip it |
+|---|---|---|---|
+| 1 | Sign-in redirect URI → the **new** `<cognito-domain>/oauth2/idpresponse` | Okta app → General | Okta 400 *"redirect_uri must be a Login redirect URI"* |
+| 2 | Recreate the `OktaOIDC` identity provider | Cognito → Social and external providers | Cognito shows its own login page |
+| 3 | App client scopes: `openid`, `email`, `profile` | Cognito → App clients → Login pages | `invalid_scope` |
+| 4 | App client: tick **OktaOIDC**; callback + sign-out URLs | same screen | Hosted UI has no Okta button; logout says *"Invalid request"* |
+
+Then update `server/.env` — `COGNITO_ISSUER`, `COGNITO_DOMAIN`, `COGNITO_CLIENT_ID`,
+`COGNITO_CLIENT_SECRET` — and re-run the probe in D.5.
+
+The new domain prefix will look confusingly like the old one
+(`ap-southeast-1oxyethcmk` vs `ap-southeast-2wyt4gz6sa`). Paste it; do not retype
+it.
+
+### D.7 (optional) Ending the Okta session too
+
+By default, signing out of the app does **not** sign the user out of Okta:
+
+| Layer | Cookie on | Cleared by logout? |
+|---|---|---|
+| App session | `localhost:3000` (`sid`) | ✅ |
+| Cognito Hosted UI | `…amazoncognito.com` | ✅ |
+| **Okta org session** | `integrator-xxxx.okta.com` | ❌ |
+
+So the next login is silent — the app looks like it never logged you out. That is
+correct OIDC behaviour, and usually what you want: signing out of one app should
+not sign you out of every other Okta app in the company. Cognito deliberately
+does not propagate logout upstream.
+
+If you want a global logout for the demo, chain it yourself:
+
+```
+POST /auth/logout → Cognito /logout → GET /auth/logout/idp → Okta /login/signout → frontend
+```
+
+1. **Okta → Security → API → Trusted Origins** → add `http://localhost:5173`,
+   type **Redirect**. Without it Okta ignores your `fromURI`.
+2. **Cognito → app client → Allowed sign-out URLs** → add
+   `http://localhost:3000/auth/logout/idp`.
+3. `server/.env`:
+   ```
+   COGNITO_LOGOUT_REDIRECT_URI=http://localhost:3000/auth/logout/idp
+   OKTA_ORG_URL=https://integrator-xxxx.okta.com
+   ```
+4. `server/src/config/env.ts`, alongside `cognito`:
+   ```ts
+   okta: {
+     orgUrl: process.env.OKTA_ORG_URL
+       ? stripTrailingSlash(process.env.OKTA_ORG_URL)
+       : "",
+   },
+   ```
+5. `server/src/routes/auth.routes.ts`, after `POST /logout`:
+   ```ts
+   router.get("/logout/idp", (req, res) => {
+     if (!env.okta.orgUrl) {
+       res.redirect(env.frontendUrl);
+       return;
+     }
+     // /login/signout ends the Okta session via its cookie. The OIDC end-session
+     // endpoint is not usable here: it wants an id_token_hint, and Okta's ID
+     // token never reaches us -- Cognito consumed it and minted its own.
+     const url = new URL(`${env.okta.orgUrl}/login/signout`);
+     url.searchParams.set("fromURI", env.frontendUrl);
+     res.redirect(url.toString());
+   });
+   ```
+
+No frontend change: `AuthContext.tsx` already does
+`window.location.assign(logoutUrl)` and will follow the chain.
+
+**Test:** sign in via Okta → sign out → sign in again. Okta should now ask for
+credentials. Before the change it signed you straight back in.
+
+### D.8 Cost, limits and teardown
 
 Federation itself is free to configure, but two numbers matter for planning:
 
