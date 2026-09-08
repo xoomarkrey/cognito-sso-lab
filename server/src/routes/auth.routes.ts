@@ -189,4 +189,23 @@ router.post("/logout", (req, res) => {
   res.json({ logoutUrl: buildLogoutUrl() });
 });
 
+// ---------------------------------------------------------------------------
+// 5b. Cognito redirects here once it has cleared its own session, so we can
+//     also end the upstream IdP session. Cognito does NOT propagate logout to
+//     an external IdP -- without this hop the next login is silent, because
+//     Okta still recognises the user.
+// ---------------------------------------------------------------------------
+router.get("/logout/idp", (req, res) => {
+  if (!env.okta.orgUrl) {
+    res.redirect(env.frontendUrl);
+    return;
+  }
+  // /login/signout ends the Okta session via its cookie. The OIDC end-session
+  // endpoint is not usable here: it wants an id_token_hint, and Okta's ID token
+  // never reaches us -- Cognito consumed it and minted its own.
+  const url = new URL(`${env.okta.orgUrl}/login/signout`);
+  url.searchParams.set("fromURI", env.frontendUrl);
+  res.redirect(url.toString());
+});
+
 export default router;

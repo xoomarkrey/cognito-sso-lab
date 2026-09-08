@@ -34,6 +34,12 @@ export const env = {
     logoutRedirectUri: optional("COGNITO_LOGOUT_REDIRECT_URI", frontendUrl),
     scopes: optional("COGNITO_SCOPES", "openid email profile"),
   },
+  okta: {
+    // Optional: without it, logout stops at Cognito and the Okta session lives on.
+    orgUrl: process.env.OKTA_ORG_URL
+      ? stripTrailingSlash(process.env.OKTA_ORG_URL)
+      : "",
+  },
 } as const;
 
 export type Env = typeof env;
